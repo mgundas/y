@@ -63,7 +63,7 @@ export function Brand() {
       className="flex items-center gap-2 rounded-full p-3 text-xl font-bold focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
     >
       <Bird className="size-7" aria-hidden="true" />
-      <span className="sr-only sm:not-sr-only">x</span>
+      <span className="sr-only sm:not-sr-only">y</span>
     </Link>
   );
 }

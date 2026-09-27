@@ -25,7 +25,7 @@ export default async function AuthLayout({
         className="flex items-center gap-2 text-2xl font-bold focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-ring"
       >
         <Bird className="size-7" aria-hidden="true" />
-        <span>x</span>
+        <span>y</span>
       </Link>
       <div className="w-full max-w-sm">{children}</div>
     </div>

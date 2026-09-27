@@ -10,7 +10,7 @@ This block is written and re-added by `next dev` — verify at `node_modules/nex
 
 ## Project
 
-Twitter/X-style app. Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4 + shadcn/ui, Drizzle + Postgres (Neon), Better Auth, Zod 4, pnpm. No `any` types.
+Y-style app. Next.js 16 App Router, React 19, TypeScript strict, Tailwind v4 + shadcn/ui, Drizzle + Postgres (Neon), Better Auth, Zod 4, pnpm. No `any` types.
 
 ## Commands
 

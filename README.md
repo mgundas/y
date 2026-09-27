@@ -1,6 +1,6 @@
-# x
+# y
 
-A Twitter/X-style social app. Next.js 16 (App Router), React 19, TypeScript strict,
+A Y-style social app. Next.js 16 (App Router), React 19, TypeScript strict,
 Tailwind v4 + shadcn/ui, Drizzle ORM + Neon Postgres, Better Auth, Zod, pnpm.
 
 > Full setup and deployment docs land in Phase 8. This is the working quickstart.

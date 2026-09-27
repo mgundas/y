@@ -14,7 +14,7 @@ import { env } from "@/lib/env";
  * `schema.ts` are what must stay in sync with better-auth's expectations.
  */
 export const auth = betterAuth({
-  appName: "x",
+  appName: "y",
   baseURL: env.BETTER_AUTH_URL,
   secret: env.BETTER_AUTH_SECRET,
 

@@ -10,10 +10,10 @@ const geist = Geist({ subsets: ["latin"], variable: "--font-sans" });
 
 export const metadata: Metadata = {
   title: {
-    default: "x",
-    template: "%s / x",
+    default: "y",
+    template: "%s / y",
   },
-  description: "A Twitter/X-style social app.",
+  description: "A Y-style social app.",
 };
 
 export default function RootLayout({ children }: LayoutProps<"/">) {

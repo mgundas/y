@@ -1,0 +1,17 @@
+import type { Metadata } from "next";
+
+import { SignInForm } from "@/components/auth/sign-in-form";
+
+export const metadata: Metadata = { title: "Sign in" };
+
+export default function SignInPage() {
+  return (
+    <section className="flex flex-col gap-6">
+      <header className="flex flex-col gap-1">
+        <h1 className="text-2xl font-bold">Sign in</h1>
+        <p className="text-sm text-muted-foreground">Welcome back.</p>
+      </header>
+      <SignInForm />
+    </section>
+  );
+}

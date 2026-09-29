@@ -6,9 +6,22 @@ import { z } from "zod";
 
 import { getCurrentUser } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { bookmarks, likes, posts, reposts } from "@/lib/db/schema";
+import {
+  bookmarks,
+  likes,
+  posts,
+  reposts,
+  user as userTable,
+} from "@/lib/db/schema";
 import { notify } from "@/lib/db/queries/notifications";
+import { checkMutationRateLimit } from "@/lib/ratelimit";
 import { postIdSchema } from "@/lib/validation/post";
+
+/**
+ * A rejection the user should read, thrown from inside the transaction. Same
+ * pattern as `PostValidationError` in `post.ts`: "already gone" is not "broken".
+ */
+class EngagementValidationError extends Error {}
 
 /**
  * Likes, reposts, and bookmarks.
@@ -163,22 +176,39 @@ export async function toggleEngagementAction(
     return { ok: false, message: "That post no longer exists." };
   }
 
-  // The author is needed for the notification, and confirming the post exists
-  // also turns a stale id into a clean rejection instead of a foreign-key
-  // violation surfacing as a generic failure.
-  const targets = await db
-    .select({ authorId: posts.authorId })
-    .from(posts)
-    .where(eq(posts.id, postId.data))
-    .limit(1);
-  const target = targets[0];
-  if (!target) {
-    return { ok: false, message: "That post no longer exists." };
+  // Two hundred toggles a minute per user. Taps are cheap and idempotent, but
+  // without any budget a script can notification-spam every author on the site.
+  const allowed = await checkMutationRateLimit({
+    userId: user.id,
+    scope: "engagement",
+    windowSeconds: 60,
+    max: 200,
+  });
+  if (!allowed) {
+    return { ok: false, message: "You're doing that too fast. Slow down." };
   }
 
-  let result: EngagementResult;
+  let result: EngagementResult & { authorUsername: string };
   try {
     result = await db.transaction(async (tx) => {
+      // Read inside the transaction, not before it. A pre-read followed by a
+      // write is a TOCTOU gap: the post can be deleted in between, and the
+      // toggle's insert would then fail on the foreign key as a generic 500
+      // instead of this sentence.
+      const targets = await tx
+        .select({
+          authorId: posts.authorId,
+          authorUsername: userTable.username,
+        })
+        .from(posts)
+        .innerJoin(userTable, eq(userTable.id, posts.authorId))
+        .where(eq(posts.id, postId.data))
+        .limit(1);
+      const target = targets[0];
+      if (!target) {
+        throw new EngagementValidationError("That post no longer exists.");
+      }
+
       const toggled =
         kind.data === "like"
           ? await toggleLike(tx, postId.data, user.id)
@@ -200,19 +230,27 @@ export async function toggleEngagementAction(
         ]);
       }
 
-      return toggled;
+      return { ...toggled, authorUsername: target.authorUsername };
     });
   } catch (error) {
+    if (error instanceof EngagementValidationError) {
+      return { ok: false, message: error.message };
+    }
     console.error(`toggle ${kind.data} failed`, error);
     return { ok: false, message: "Could not save that. Please try again." };
   }
 
-  // The feed, the post detail page, and the bookmarks page all read these
-  // counters, and they are reached by many URLs, so the cheap correct move is to
-  // drop the cached renders of the entry points rather than try to enumerate
-  // every page a given post appears on. The pages themselves are dynamic (they
-  // read the session cookie), so they re-render regardless.
+  // The feed, the author's profile, the post detail page, and the bookmarks
+  // page all read these counters. The exact detail URL needs the author's
+  // username, which the transaction already read - so unlike before, the
+  // detail page is covered too. JS clients settle the rest via
+  // `router.refresh()`; see the note in `post.ts` about the residual no-JS gap.
   revalidatePath("/");
+  revalidatePath(`/${result.authorUsername}`);
+  revalidatePath(
+    `/${result.authorUsername}/status/${postId.data}`,
+  );
+  revalidatePath("/bookmarks");
   // The author may have gained a notification, which changes their nav badge.
   revalidatePath("/notifications");
 

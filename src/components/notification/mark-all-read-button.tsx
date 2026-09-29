@@ -2,6 +2,7 @@
 
 import { useTransition } from "react";
 import { useRouter } from "next/navigation";
+import { toast } from "sonner";
 
 import { Button } from "@/components/ui/button";
 import { markAllNotificationsReadAction } from "@/lib/actions/notification";
@@ -26,7 +27,10 @@ export function MarkAllReadButton({ disabled }: { disabled: boolean }) {
       size="sm"
       onClick={() =>
         startTransition(async () => {
-          await markAllNotificationsReadAction();
+          const result = await markAllNotificationsReadAction();
+          if (!result.ok) {
+            toast.error(result.message);
+          }
           router.refresh();
         })
       }

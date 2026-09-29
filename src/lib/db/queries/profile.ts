@@ -1,9 +1,10 @@
 import "server-only";
 
+import { alias } from "drizzle-orm/pg-core";
 import { and, count, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { follows, likes, posts, user } from "@/lib/db/schema";
+import { blocks, follows, likes, posts, user } from "@/lib/db/schema";
 
 /**
  * Profile reads. Separate from `feed.ts` because these return a `user` row
@@ -25,6 +26,13 @@ export interface Profile {
   followedByViewer: boolean;
   /** True when the viewer is looking at their own profile. */
   isSelf: boolean;
+  /**
+   * Block state in both directions. Either one hides the profile's posts: the
+   * page renders a notice instead of the timeline, and the viewer's feed never
+   * contained them in the first place (`excludeBlocked` in `feed.ts`).
+   */
+  blockedByViewer: boolean;
+  blockingViewer: boolean;
 }
 
 export async function getProfileByUsername({
@@ -37,6 +45,11 @@ export async function getProfileByUsername({
   // `lower()` on both sides so `/AdaLovelace` and `/adalovelace` are the same
   // page. The column is already stored lowercase, but the URL is not, and a
   // 404 on a re-cased link is a bad first impression.
+  // Aliased twice because blocks are directional: one join reads "viewer
+  // blocked this profile", the other "this profile blocked the viewer".
+  const viewerBlock = alias(blocks, "viewer_block");
+  const profileBlock = alias(blocks, "profile_block");
+
   const rows = await db
     .select({
       id: user.id,
@@ -50,6 +63,8 @@ export async function getProfileByUsername({
       followingCount: user.followingCount,
       postCount: user.postCount,
       followedByViewer: follows.followerId,
+      blockedByViewer: viewerBlock.blockedId,
+      blockingViewer: profileBlock.blockerId,
     })
     .from(user)
     .leftJoin(
@@ -57,6 +72,20 @@ export async function getProfileByUsername({
       and(
         eq(follows.followerId, viewerId ?? ""),
         eq(follows.followingId, user.id),
+      ),
+    )
+    .leftJoin(
+      viewerBlock,
+      and(
+        eq(viewerBlock.blockerId, viewerId ?? ""),
+        eq(viewerBlock.blockedId, user.id),
+      ),
+    )
+    .leftJoin(
+      profileBlock,
+      and(
+        eq(profileBlock.blockerId, user.id),
+        eq(profileBlock.blockedId, viewerId ?? ""),
       ),
     )
     .where(sql`lower(${user.username}) = ${username.toLowerCase()}`)
@@ -69,6 +98,8 @@ export async function getProfileByUsername({
     ...row,
     followedByViewer: row.followedByViewer !== null,
     isSelf: viewerId !== null && viewerId === row.id,
+    blockedByViewer: row.blockedByViewer !== null,
+    blockingViewer: row.blockingViewer !== null,
   };
 }
 

@@ -15,6 +15,7 @@ import {
   smallint,
   text,
   timestamp,
+  unique,
 } from "drizzle-orm/pg-core";
 
 /**
@@ -251,8 +252,14 @@ export const posts = pgTable(
     ),
     // "For you" feed.
     index("posts_created_idx").on(t.createdAt.desc(), t.id.desc()),
-    // Reply thread listing.
-    index("posts_parent_created_idx").on(t.parentId, t.createdAt),
+    // Reply thread listing. Matches `getReplies`' `ORDER BY created_at DESC,
+    // id DESC` exactly so Postgres walks the index instead of sorting; the
+    // old `(parent_id, created_at ASC)` shape could not serve that order.
+    index("posts_parent_created_idx").on(
+      t.parentId,
+      t.createdAt.desc(),
+      t.id.desc(),
+    ),
     index("posts_quoted_post_id_idx").on(t.quotedPostId),
     index("posts_search_vector_idx").using("gin", t.searchVector),
   ],
@@ -274,7 +281,9 @@ export const postImages = pgTable(
   },
   (t) => [
     index("post_images_post_id_idx").on(t.postId),
-    index("post_images_post_position_idx").on(t.postId, t.position),
+    // One image per slot: a duplicate position would render two images in the
+    // same place, so the uniqueness is structural, not cosmetic.
+    unique("post_images_post_position_unique").on(t.postId, t.position),
     check("post_images_position_range", sql`${t.position} between 0 and 3`),
   ],
 );
@@ -373,6 +382,43 @@ export const follows = pgTable(
 );
 
 /* -------------------------------------------------------------------------- */
+/* blocks                                                                      */
+/* -------------------------------------------------------------------------- */
+
+/**
+ * One-way blocks. The composite PK makes block/unblock an idempotent toggle,
+ * exactly like the engagement edges.
+ *
+ * Semantics, kept deliberately narrow:
+ * - Blocking removes follows in both directions (same transaction).
+ * - Blocked content is excluded from feeds, search, timelines, and profiles.
+ * - A blocked user cannot follow the blocker back; the follow action rejects.
+ * What it is NOT: likes and replies on already-visible posts are not
+ * retroactively policed. Enforcement covers discovery and follows, which is
+ * where harassment scales; per-row policing of old content is out of scope.
+ */
+export const blocks = pgTable(
+  "blocks",
+  {
+    blockerId: text("blocker_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    blockedId: text("blocked_id")
+      .notNull()
+      .references(() => user.id, { onDelete: "cascade" }),
+    createdAt: timestamp("created_at", { withTimezone: true })
+      .defaultNow()
+      .notNull(),
+  },
+  (t) => [
+    primaryKey({ columns: [t.blockerId, t.blockedId] }),
+    // "Who blocked X" lookups and the exclusion joins filter by blocked user.
+    index("blocks_blocked_id_idx").on(t.blockedId),
+    check("blocks_no_self_block", sql`${t.blockerId} <> ${t.blockedId}`),
+  ],
+);
+
+/* -------------------------------------------------------------------------- */
 /* hashtags                                                                    */
 /* -------------------------------------------------------------------------- */
 
@@ -460,6 +506,29 @@ export const notifications = pgTable(
     index("notifications_unread_idx")
       .on(t.userId)
       .where(sql`${t.readAt} is null`),
+    /**
+     * Cross-request duplicate guard. `notify()` dedupes within one batch, but
+     * two requests racing (a double-clicked like is two transactions) would
+     * each pass the in-memory filter and insert the same row. The insert uses
+     * `onConflictDoNothing`, so the loser is dropped instead.
+     *
+     * `NULLS NOT DISTINCT` is applied in the migration by hand (drizzle-kit
+     * has no spelling for it): follow notifications carry a NULL `post_id`,
+     * and without it two NULLs never conflict, so the constraint would only
+     * protect post-attached types. Do not "simplify" the migration back to a
+     * plain UNIQUE - it silently re-opens the follow race.
+     *
+     * Deliberate tradeoff: re-engaging after undoing (like, unlike, like)
+     * finds the first row still present and does not create a second one.
+     * Collapsing repeat engagements into one notification is the product
+     * behavior being chosen here, not an oversight.
+     */
+    unique("notifications_dedup_unique").on(
+      t.userId,
+      t.type,
+      t.postId,
+      t.actorId,
+    ),
   ],
 );
 
@@ -479,6 +548,8 @@ export const userRelations = relations(user, ({ many }) => ({
   bookmarks: many(bookmarks),
   notifications: many(notifications, { relationName: "notificationsRecipient" }),
   actedNotifications: many(notifications, { relationName: "notificationsActor" }),
+  blockedUsers: many(blocks, { relationName: "blocksBlocker" }),
+  blockedBy: many(blocks, { relationName: "blocksBlocked" }),
 }));
 
 export const sessionRelations = relations(session, ({ one }) => ({
@@ -528,6 +599,19 @@ export const repostsRelations = relations(reposts, ({ one }) => ({
 export const bookmarksRelations = relations(bookmarks, ({ one }) => ({
   user: one(user, { fields: [bookmarks.userId], references: [user.id] }),
   post: one(posts, { fields: [bookmarks.postId], references: [posts.id] }),
+}));
+
+export const blocksRelations = relations(blocks, ({ one }) => ({
+  blocker: one(user, {
+    fields: [blocks.blockerId],
+    references: [user.id],
+    relationName: "blocksBlocker",
+  }),
+  blocked: one(user, {
+    fields: [blocks.blockedId],
+    references: [user.id],
+    relationName: "blocksBlocked",
+  }),
 }));
 
 export const followsRelations = relations(follows, ({ one }) => ({

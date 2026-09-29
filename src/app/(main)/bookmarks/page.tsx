@@ -39,6 +39,7 @@ export default async function BookmarksPage({
         page={page}
         limit={limit}
         signedIn
+        viewerUsername={session.user.username}
         basePath="/bookmarks"
         emptyMessage="Bookmark a post and it will show up here."
       />

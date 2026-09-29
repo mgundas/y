@@ -49,12 +49,18 @@ export function Composer({
   user,
   placeholder = "What's happening?",
   parentId,
+  quotedPostId,
+  quotingUsername,
   submitLabel = "Post",
 }: {
   user: { name: string; username: string; image: string | null };
   placeholder?: string;
   /** Set on a post detail page to make the submission a reply. */
   parentId?: number;
+  /** Set on the quote page to make the submission a quote. */
+  quotedPostId?: number;
+  /** Shown so the quoter can see what they are quoting. */
+  quotingUsername?: string;
   submitLabel?: string;
 }) {
   const [state, formAction] = useActionState(createPostAction, initialState);
@@ -65,11 +71,14 @@ export function Composer({
 
   return (
     <form action={formAction} className="flex gap-3 border-b border-border px-4 py-3">
-      {/* The reply target travels as a hidden field rather than as a prop the
-          action could read, because with JS off the form post is the only thing
-          the server receives. */}
+      {/* The reply/quote target travels as a hidden field rather than as a prop
+          the action could read, because with JS off the form post is the only
+          thing the server receives. */}
       {parentId ? (
         <input type="hidden" name="parentId" value={parentId} />
+      ) : null}
+      {quotedPostId ? (
+        <input type="hidden" name="quotedPostId" value={quotedPostId} />
       ) : null}
 
       <Avatar className="size-10 shrink-0">
@@ -106,11 +115,23 @@ export function Composer({
           </p>
         ) : null}
 
+        {quotingUsername ? (
+          <p className="mt-2 text-sm text-muted-foreground">
+            Quoting{" "}
+            <span className="font-medium text-foreground">
+              @{quotingUsername}
+            </span>
+          </p>
+        ) : null}
+
         <div className="mt-2 flex items-center justify-between gap-3">
           <p className="text-xs text-muted-foreground">
             Mentions and hashtags are linked automatically.
           </p>
           <div className="flex items-center gap-3">
+            {/* The visible count is aria-hidden because a number ticking down
+                on every keystroke is noise; this live region speaks only when
+                the limit is close, which is the only state that needs action. */}
             <span
               aria-hidden="true"
               className={cn(
@@ -119,6 +140,9 @@ export function Composer({
               )}
             >
               {remaining}
+            </span>
+            <span aria-live="polite" className="sr-only">
+              {remaining <= 20 ? `${remaining} characters remaining` : ""}
             </span>
             <PostButton label={submitLabel} />
           </div>

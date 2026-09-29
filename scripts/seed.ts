@@ -403,10 +403,15 @@ async function main(): Promise<void> {
     }
   }
 
+  // `onConflictDoNothing` throughout this file is for `--keep` reruns, which
+  // re-insert against existing rows. Fresh wipes never conflict, so the
+  // clauses change nothing there - they only stop a re-run from dying on the
+  // composite PKs and unique tags.
   if (tagCounts.size > 0) {
-    await db.insert(hashtags).values(
-      [...tagCounts].map(([tag, postCount]) => ({ tag, postCount })),
-    );
+    await db
+      .insert(hashtags)
+      .values([...tagCounts].map(([tag, postCount]) => ({ tag, postCount })))
+      .onConflictDoNothing({ target: hashtags.tag });
   }
 
   const tagIdByName = new Map(
@@ -424,7 +429,9 @@ async function main(): Promise<void> {
       if (hashtagId !== undefined) links.push({ postId: row.id, hashtagId });
     }
   });
-  if (links.length > 0) await db.insert(postHashtags).values(links);
+  if (links.length > 0) {
+    await db.insert(postHashtags).values(links).onConflictDoNothing();
+  }
   console.log(`  ${tagCounts.size} hashtags, ${links.length} links`);
 
   /* --- follow graph ------------------------------------------------------ */
@@ -442,7 +449,7 @@ async function main(): Promise<void> {
       followRows.push({ followerId, followingId });
     }
   }
-  await db.insert(follows).values(followRows);
+  await db.insert(follows).values(followRows).onConflictDoNothing();
   console.log(`  ${followRows.length} follows`);
 
   /* --- likes / reposts / bookmarks --------------------------------------- */
@@ -463,9 +470,9 @@ async function main(): Promise<void> {
     }
   }
 
-  await db.insert(likes).values(likeRows);
-  await db.insert(reposts).values(repostRows);
-  await db.insert(bookmarks).values(bookmarkRows);
+  await db.insert(likes).values(likeRows).onConflictDoNothing();
+  await db.insert(reposts).values(repostRows).onConflictDoNothing();
+  await db.insert(bookmarks).values(bookmarkRows).onConflictDoNothing();
   console.log(
     `  ${likeRows.length} likes, ${repostRows.length} reposts, ${bookmarkRows.length} bookmarks`,
   );

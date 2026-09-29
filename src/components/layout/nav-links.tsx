@@ -71,8 +71,8 @@ export function NavLinks({ unreadCount = 0 }: { unreadCount?: number }) {
                     </span>
                   )}
                 </span>
-                <span className="hidden xl:inline">{label}</span>
-                <span className="sr-only xl:hidden">{label}</span>
+                <span className="hidden sm:inline">{label}</span>
+                <span className="sr-only sm:hidden">{label}</span>
               </Link>
             </li>
           );
@@ -100,8 +100,8 @@ export function ProfileLink({ username }: { username: string | null }) {
       )}
     >
       <UserIcon className="size-6 shrink-0" aria-hidden="true" />
-      <span className="hidden xl:inline">Profile</span>
-      <span className="sr-only xl:hidden">Profile</span>
+      <span className="hidden sm:inline">Profile</span>
+      <span className="sr-only sm:hidden">Profile</span>
     </Link>
   );
 }

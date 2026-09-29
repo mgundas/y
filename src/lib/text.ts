@@ -11,6 +11,12 @@
 /** Must stay in sync with `postContentSchema`'s max, and with the composer. */
 export const USERNAME_MAX = 15;
 export const HASHTAG_MAX = 50;
+/**
+ * Cap on distinct @-mentions per post. Without one, a single post can fan out
+ * to ~18 notification rows, which makes mention-spam nearly free. Ten is
+ * generous for real conversation and cheap to reason about.
+ */
+export const MENTION_MAX = 10;
 
 export type Segment =
   | { kind: "text"; value: string }

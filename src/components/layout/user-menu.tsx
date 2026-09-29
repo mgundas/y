@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { LogOut, User as UserIcon } from "lucide-react";
+import { LogOut, Settings as SettingsIcon, User as UserIcon } from "lucide-react";
 
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Button } from "@/components/ui/button";
@@ -54,7 +54,7 @@ export function UserMenu({ user }: { user: UserMenuUser | null }) {
             {user.image ? <AvatarImage src={user.image} alt="" /> : null}
             <AvatarFallback>{initials(user.name)}</AvatarFallback>
           </Avatar>
-          <span className="hidden min-w-0 flex-col xl:flex">
+          <span className="hidden min-w-0 flex-col sm:flex">
             <span className="truncate text-sm font-semibold">{user.name}</span>
             <span className="truncate text-sm text-muted-foreground">
               @{user.username}
@@ -76,6 +76,12 @@ export function UserMenu({ user }: { user: UserMenuUser | null }) {
           <Link href={`/${user.username}`}>
             <UserIcon aria-hidden="true" />
             Profile
+          </Link>
+        </DropdownMenuItem>
+        <DropdownMenuItem asChild>
+          <Link href="/settings/profile">
+            <SettingsIcon aria-hidden="true" />
+            Settings
           </Link>
         </DropdownMenuItem>
         <DropdownMenuSeparator />

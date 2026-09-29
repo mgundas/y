@@ -1,3 +1,4 @@
+import { MobileNav } from "@/components/layout/mobile-nav";
 import { NavLinks, ProfileLink } from "@/components/layout/nav-links";
 import { Brand, RightSidebar } from "@/components/layout/right-sidebar";
 import { UserMenu } from "@/components/layout/user-menu";
@@ -45,13 +46,20 @@ export default async function MainLayout({
         </div>
       </div>
 
-      <main className="min-w-0 flex-1 border-r border-border">
+      {/*
+        Constrained reading column: without a max-width the centre stretches
+        across ultrawide screens and lines run past any comfortable measure.
+      */}
+      <main className="min-w-0 max-w-2xl flex-1 border-r border-border pb-16 sm:pb-0">
         {children}
       </main>
 
       <div className="hidden w-80 shrink-0 pl-6 lg:block">
         <RightSidebar />
       </div>
+
+      {/* Bottom nav for small screens, where the left rail is icons only. */}
+      <MobileNav unreadCount={unreadCount} />
     </div>
   );
 }

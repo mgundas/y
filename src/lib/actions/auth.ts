@@ -67,22 +67,21 @@ export async function signUpAction(
 
   const { name, username, email, password } = parsed.data;
 
-  // Pre-check so the common case gets a friendly message. The unique index is
-  // what actually guarantees uniqueness, since two sign-ups can race past this.
+  // Pre-check so the common case gets a fast answer. The message is
+  // deliberately generic: naming *which* field clashed would let an
+  // unauthenticated caller probe which usernames and emails are registered.
+  // The unique index is what actually guarantees uniqueness, since two
+  // sign-ups can race past this.
   const clash = await db
-    .select({ username: userTable.username, email: userTable.email })
+    .select({ id: userTable.id })
     .from(userTable)
     .where(
       sql`lower(${userTable.username}) = ${username} or lower(${userTable.email}) = ${email}`,
     )
     .limit(1);
 
-  const existing = clash[0];
-  if (existing) {
-    if (existing.username === username) {
-      return { errors: { username: ["That username is already taken."] } };
-    }
-    return { errors: { email: ["An account with that email already exists."] } };
+  if (clash[0]) {
+    return { message: "An account with those details already exists." };
   }
 
   try {
@@ -91,23 +90,41 @@ export async function signUpAction(
       headers: await headers(),
     });
   } catch (error) {
-    const violation = findUniqueViolation(error);
-    if (violation) {
-      // The constraint name is on the same node as the 23505, at the bottom of
-      // the chain. Anything that is not clearly the username is treated as the
-      // email, since email is the only other unique column on `user`.
-      const constraint = violation["constraint_name"] ?? violation["constraint"];
-      if (typeof constraint === "string" && constraint.includes("username")) {
-        return { errors: { username: ["That username is already taken."] } };
-      }
-      return { errors: { email: ["An account with that email already exists."] } };
+    // Same generic message on the race path: the `23505` backstop catches two
+    // sign-ups that both passed the pre-check, and distinguishing them would
+    // reopen the oracle the pre-check just closed.
+    if (findUniqueViolation(error)) {
+      return { message: "An account with those details already exists." };
     }
     console.error("sign-up failed", error);
     return { message: "Something went wrong. Please try again." };
   }
 
   // `nextCookies()` has already queued the Set-Cookie headers.
-  redirect("/");
+  redirect(safeCallbackUrl(formData.get("callbackUrl")));
+}
+
+/**
+ * Where to send the user after sign-in/up.
+ *
+ * `proxy.ts` preserves the deep link as `?callbackUrl=`, but it arrives as
+ * untrusted client input, so it is validated here rather than passed through:
+ * same-origin path only, starting with exactly one `/`. Anything else -
+ * absolute URLs, protocol-relative `//evil`, backslashes - falls back to `/`.
+ * Without this, `?callbackUrl=https://evil.example` would be an open redirect.
+ */
+function safeCallbackUrl(raw: unknown): string {
+  if (typeof raw !== "string") return "/";
+  if (
+    !raw.startsWith("/") ||
+    raw.startsWith("//") ||
+    raw.includes("\\") ||
+    raw.includes("\n") ||
+    raw.includes("\r")
+  ) {
+    return "/";
+  }
+  return raw;
 }
 
 export async function signInAction(
@@ -140,7 +157,7 @@ export async function signInAction(
     return { message: "Something went wrong. Please try again." };
   }
 
-  redirect("/");
+  redirect(safeCallbackUrl(formData.get("callbackUrl")));
 }
 
 export async function signOutAction(): Promise<void> {

@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import Link from "next/link";
 import { notFound } from "next/navigation";
-import { cache } from "react";
 
 import { Composer } from "@/components/feed/composer";
 import { PostCard } from "@/components/post/post-card";
@@ -9,19 +8,16 @@ import { getCurrentUser } from "@/lib/auth/session";
 import {
   getPostById,
   getReplies,
-  type FeedPost,
+  REPLY_LIMIT,
 } from "@/lib/db/queries/feed";
 
 /**
  * A single post with its direct replies.
  *
- * This exists because the feed's action row needs a real destination, and
- * because `createPostAction` already accepts a `parentId` that nothing in the UI
- * could supply. Both of those point here, so the route is deliberately thin: no
- * new query shape, no new card component.
- *
- * Deliberately not implemented, and left to Phase 4: paginating replies,
- * nested threads, and the like/repost/bookmark controls.
+ * Replies are keyset-paginated oldest-first under `?repliesCursor=`: page one
+ * is the start of the thread, and "Show more replies" walks forward. The
+ * cursor cannot collide with anything because the page itself is addressed by
+ * id, not by cursor.
  */
 
 /**
@@ -36,15 +32,6 @@ function parseId(raw: string): number | null {
   return Number.isSafeInteger(id) && id > 0 ? id : null;
 }
 
-/**
- * `cache` dedupes this between `generateMetadata` and the page body, which both
- * need the post. Without it every detail page request runs the query twice.
- */
-const loadPost = cache(
-  async (id: number): Promise<FeedPost | null> =>
-    getPostById({ id, viewerId: (await getCurrentUser())?.id ?? null }),
-);
-
 export async function generateMetadata({
   params,
 }: {
@@ -52,24 +39,43 @@ export async function generateMetadata({
 }): Promise<Metadata> {
   const { id } = await params;
   const postId = parseId(id);
-  const post = postId === null ? null : await loadPost(postId);
+  // Signed out on purpose: metadata must never depend on who is asking, or
+  // the cache key splits per user and link unfurls vary.
+  const post = postId === null ? null : await getPostById({ id: postId });
 
   if (!post) return { title: "Post" };
-  return { title: `${post.author.name} (@${post.author.username})` };
+  const description =
+    post.content.length > 160
+      ? `${post.content.slice(0, 157)}…`
+      : post.content;
+  return {
+    title: `${post.author.name} (@${post.author.username})`,
+    description,
+    openGraph: { title: `${post.author.name} (@${post.author.username})`, description },
+  };
 }
 
 export default async function PostDetailPage({
   params,
+  searchParams,
 }: {
   params: Promise<{ username: string; id: string }>;
+  searchParams: Promise<{ repliesCursor?: string }>;
 }) {
   const { username, id } = await params;
+  const { repliesCursor } = await searchParams;
 
   const postId = parseId(id);
   if (postId === null) notFound();
 
-  const user = await getCurrentUser();
-  const post = await loadPost(postId);
+  // Session and post in parallel - they do not depend on each other. The old
+  // `cache()` loader read the session internally *and* the page read it again;
+  // hoisting the one read here and passing `viewerId` down removes the double
+  // lookup without needing the cache at all.
+  const [user, post] = await Promise.all([
+    getCurrentUser(),
+    getPostById({ id: postId }),
+  ]);
   if (!post) notFound();
 
   // One canonical URL per post. The id is the real key; the username is only
@@ -78,12 +84,15 @@ export default async function PostDetailPage({
   // honest answer, and it stops the same post being reachable under two paths.
   if (post.author.username !== username.toLowerCase()) notFound();
 
-  const replies = await getReplies({
+  const viewerId = user?.id ?? null;
+  const repliesPage = await getReplies({
     parentId: post.id,
-    viewerId: user?.id ?? null,
+    cursor: repliesCursor,
+    limit: REPLY_LIMIT,
+    viewerId,
   });
 
-  const newestReplyId = replies.at(-1)?.id ?? post.id;
+  const newestReplyId = repliesPage.posts.at(-1)?.id ?? post.id;
 
   return (
     <div>
@@ -93,7 +102,11 @@ export default async function PostDetailPage({
 
       <ul>
         <li>
-          <PostCard post={post} signedIn={Boolean(user)} />
+          <PostCard
+            post={post}
+            signedIn={Boolean(user)}
+            canDelete={user?.username === post.author.username}
+          />
         </li>
       </ul>
 
@@ -132,24 +145,34 @@ export default async function PostDetailPage({
             : `${post.replyCount} replies`}
       </h2>
 
-      {replies.length === 0 ? (
+      {repliesPage.posts.length === 0 ? (
         <p className="px-4 pb-8 text-center text-sm text-muted-foreground">
           No replies yet.
         </p>
       ) : (
         <>
-          {post.replyCount > replies.length ? (
-            <p className="px-4 pb-3 text-xs text-muted-foreground">
-              Showing the {replies.length} most recent.
-            </p>
-          ) : null}
           <ul>
-            {replies.map((reply) => (
+            {repliesPage.posts.map((reply) => (
               <li key={reply.id}>
-                <PostCard post={reply} signedIn={Boolean(user)} />
+                <PostCard
+                  post={reply}
+                  signedIn={Boolean(user)}
+                  canDelete={user?.username === reply.author.username}
+                />
               </li>
             ))}
           </ul>
+          {repliesPage.nextCursor ? (
+            <div className="p-4">
+              <Link
+                href={`/${post.author.username}/status/${post.id}?repliesCursor=${encodeURIComponent(repliesPage.nextCursor)}`}
+                scroll={false}
+                className="inline-flex w-full items-center justify-center rounded-full border border-border px-4 py-3 text-sm font-medium transition-colors hover:bg-accent focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+              >
+                Show more replies
+              </Link>
+            </div>
+          ) : null}
         </>
       )}
     </div>

@@ -2,11 +2,13 @@ import Link from "next/link";
 import { Bird, Search } from "lucide-react";
 
 import { Input } from "@/components/ui/input";
-import { Skeleton } from "@/components/ui/skeleton";
 import { cn } from "@/lib/utils";
+import { getTrendingHashtags } from "@/lib/db/queries/feed";
+import { formatCount } from "@/lib/text";
 
-/** Shell only. The real search field and trending list arrive in Phase 7. */
-export function RightSidebar() {
+/** Search field plus live trending. An async Server Component - no client JS. */
+export async function RightSidebar() {
+  const trending = await getTrendingHashtags(3);
   return (
     <aside
       aria-label="Search and trends"
@@ -37,21 +39,41 @@ export function RightSidebar() {
         <h2 id="trending-heading" className="px-4 py-3 text-lg font-bold">
           Trending now
         </h2>
-        <div className="flex flex-col gap-3 px-4 pb-4">
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-          <Skeleton className="h-10 w-full" />
-        </div>
+        {trending.length === 0 ? (
+          <p className="px-4 pb-4 text-sm text-muted-foreground">
+            Nothing trending yet.
+          </p>
+        ) : (
+          <ul className="pb-2">
+            {trending.map((row) => (
+              <li key={row.tag}>
+                <Link
+                  href={`/explore/hashtag/${row.tag}`}
+                  className="block px-4 py-2 transition-colors hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
+                >
+                  <p className="text-sm font-semibold">#{row.tag}</p>
+                  <p className="text-xs text-muted-foreground">
+                    {formatCount(row.postCount24h)}{" "}
+                    {row.postCount24h === 1 ? "post" : "posts"}
+                  </p>
+                </Link>
+              </li>
+            ))}
+          </ul>
+        )}
       </section>
 
-      <nav aria-label="Legal" className="flex flex-wrap gap-x-4 gap-y-1 px-4 text-xs text-muted-foreground">
-        <span>Terms</span>
-        <span>Privacy</span>
-        <span>Accessibility</span>
+      {/*
+        Plain text, not links: there are no Terms/Privacy pages, and
+        link-styled spans that go nowhere are a dead end wearing a costume.
+        When those pages exist, these become Links.
+      */}
+      <p className="flex flex-wrap gap-x-4 gap-y-1 px-4 text-xs text-muted-foreground">
+        <span>y © 2026</span>
         <Link href="/explore" className="hover:underline">
           Explore
         </Link>
-      </nav>
+      </p>
     </aside>
   );
 }

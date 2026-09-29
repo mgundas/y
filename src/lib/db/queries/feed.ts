@@ -1,11 +1,31 @@
 import "server-only";
 
 import { alias } from "drizzle-orm/pg-core";
-import { and, desc, eq, isNotNull, isNull, sql, type SQL } from "drizzle-orm";
+import {
+  and,
+  asc,
+  desc,
+  eq,
+  inArray,
+  isNotNull,
+  isNull,
+  sql,
+  type SQL,
+} from "drizzle-orm";
 
 import { decodeCursor, encodeCursor, type Cursor } from "@/lib/cursor";
 import { db } from "@/lib/db";
-import { bookmarks, likes, posts, reposts, user } from "@/lib/db/schema";
+import {
+  blocks,
+  bookmarks,
+  hashtags,
+  likes,
+  postHashtags,
+  postImages,
+  posts,
+  reposts,
+  user,
+} from "@/lib/db/schema";
 
 /**
  * Feed reads. Server Components call these directly, so there is no API layer to
@@ -20,12 +40,20 @@ export interface QuotedPost {
   authorName: string;
 }
 
+export interface PostImage {
+  url: string;
+  altText: string | null;
+  width: number | null;
+  height: number | null;
+}
+
 export interface FeedPost {
   id: number;
   content: string;
   createdAt: Date;
   parentId: number | null;
   quoted: QuotedPost | null;
+  images: PostImage[];
   likeCount: number;
   repostCount: number;
   replyCount: number;
@@ -63,13 +91,43 @@ const quotedAuthor = alias(user, "quoted_author");
 const parentAuthor = alias(user, "parent_author");
 
 /**
- * `(created_at, id) < (t, i)` as a row-value comparison so Postgres can walk
- * `posts_created_idx` directly. Spelled out as
+ * `(created_at, id) </> (t, i)` as a row-value comparison so Postgres can walk
+ * the matching index directly. Spelled out as
  * `created_at < t OR (created_at = t AND id < i)` it is equivalent, but the
  * planner frequently degrades that to a scan.
+ *
+ * Direction matters: the main feed walks newest-first (`<`), while reply pages
+ * walk oldest-first (`>`) so page one is the start of the thread, not the end.
  */
-function keysetPredicate(cursor: Cursor): SQL {
-  return sql`(${posts.createdAt}, ${posts.id}) < (${cursor.t}, ${cursor.i})`;
+type SortDirection = "desc" | "asc";
+
+function keysetPredicate(cursor: Cursor, direction: SortDirection = "desc"): SQL {
+  return direction === "desc"
+    ? sql`(${posts.createdAt}, ${posts.id}) < (${cursor.t}, ${cursor.i})`
+    : sql`(${posts.createdAt}, ${posts.id}) > (${cursor.t}, ${cursor.i})`;
+}
+
+/**
+ * Block exclusion for every list query.
+ *
+ * A viewer never sees posts by someone they blocked, nor by someone who
+ * blocked them - in the feed, on profiles, in search, or in bookmarks. Two
+ * `NOT EXISTS` halves because the relation is directional and both directions
+ * hide. Detail pages (`getPostById`) deliberately skip this: a direct link is
+ * not discovery, and inventing a second visibility rule for it would split the
+ * semantics.
+ */
+function excludeBlocked(
+  where: SQL | undefined,
+  viewerId: string | null,
+): SQL | undefined {
+  if (!viewerId) return where;
+  const hidden = sql`not exists (
+    select 1 from ${blocks} b
+    where (b.blocker_id = ${viewerId} and b.blocked_id = ${posts.authorId})
+       or (b.blocker_id = ${posts.authorId} and b.blocked_id = ${viewerId})
+  )`;
+  return where ? and(where, hidden) : hidden;
 }
 
 /**
@@ -87,6 +145,7 @@ function selectFeed(
   where: SQL | undefined,
   limit: number,
   viewerId: string | null,
+  direction: SortDirection = "desc",
 ) {
   const viewer = viewerId ?? "";
 
@@ -136,7 +195,11 @@ function selectFeed(
       and(eq(bookmarks.postId, posts.id), eq(bookmarks.userId, viewer)),
     )
     .where(where)
-    .orderBy(desc(posts.createdAt), desc(posts.id))
+    .orderBy(
+      ...(direction === "desc"
+        ? [desc(posts.createdAt), desc(posts.id)]
+        : [asc(posts.createdAt), asc(posts.id)]),
+    )
     // One extra row is the only "is there a next page?" signal needed, which
     // avoids a second COUNT and the off-by-one when a page comes back exactly
     // full.
@@ -145,12 +208,13 @@ function selectFeed(
 
 type PostRow = Awaited<ReturnType<typeof selectFeed>>[number];
 
-function toFeedPost(row: PostRow): FeedPost {
+function toFeedPost(row: PostRow, hideBookmarkCount: boolean): FeedPost {
   return {
     id: row.id,
     content: row.content,
     createdAt: row.createdAt,
     parentId: row.parentId,
+    images: [],
     // Every part of the quote has to be present, not just the id. The quoted
     // post's author is guaranteed to exist by `on delete cascade`, but the
     // compiler cannot know that, so the check is total and degrades to "no
@@ -171,7 +235,10 @@ function toFeedPost(row: PostRow): FeedPost {
     repostCount: row.repostCount,
     replyCount: row.replyCount,
     quoteCount: row.quoteCount,
-    bookmarkCount: row.bookmarkCount,
+    // Bookmarks are private. The count is only populated for a signed-in
+    // viewer; signed out it is 0 rather than the real number, so the card
+    // cannot leak how many people saved a post to a reader with no account.
+    bookmarkCount: hideBookmarkCount ? 0 : row.bookmarkCount,
     author: {
       username: row.authorUsername,
       name: row.authorName,
@@ -187,13 +254,53 @@ function toFeedPost(row: PostRow): FeedPost {
 async function toPage(
   rows: PostRow[],
   limit: number,
+  viewerId: string | null,
 ): Promise<FeedPage> {
   const hasMore = rows.length > limit;
   const page = hasMore ? rows.slice(0, limit) : rows;
   const last = page.at(-1);
+  const hideBookmarkCount = viewerId === null;
+
+  const feedPosts = page.map((row) => toFeedPost(row, hideBookmarkCount));
+
+  // Media read side: one query for the whole page, mapped back by post id.
+  // A join would fan out the rows; `selectFeed`'s limit counts posts, not
+  // (post, image) pairs, so the images ride along separately.
+  if (feedPosts.length > 0) {
+    const imageRows = await db
+      .select({
+        postId: postImages.postId,
+        url: postImages.url,
+        altText: postImages.altText,
+        width: postImages.width,
+        height: postImages.height,
+      })
+      .from(postImages)
+      .where(
+        inArray(
+          postImages.postId,
+          feedPosts.map((post) => post.id),
+        ),
+      )
+      .orderBy(asc(postImages.postId), asc(postImages.position));
+    const byPost = new Map<number, PostImage[]>();
+    for (const image of imageRows) {
+      const list = byPost.get(image.postId) ?? [];
+      list.push({
+        url: image.url,
+        altText: image.altText,
+        width: image.width,
+        height: image.height,
+      });
+      byPost.set(image.postId, list);
+    }
+    for (const post of feedPosts) {
+      post.images = byPost.get(post.id) ?? [];
+    }
+  }
 
   return {
-    posts: page.map(toFeedPost),
+    posts: feedPosts,
     nextCursor:
       hasMore && last
         ? encodeCursor({ t: last.createdAt.toISOString(), i: last.id })
@@ -217,11 +324,14 @@ export async function getFeedPosts({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      cursor ? keysetPredicate(cursor) : undefined,
+      viewerId,
+    ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
 }
 
 /** Top-level posts by one author. The Posts tab on a profile (Phase 5). */
@@ -238,15 +348,20 @@ export async function getPostsByAuthor({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    and(
-      eq(user.username, authorUsername),
-      isNull(posts.parentId),
-      cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      and(
+        // Case-insensitive like the profile lookup itself: `/AdaLovelace`
+        // resolves, so its tabs must too instead of 404ing on a re-cased URL.
+        sql`lower(${user.username}) = ${authorUsername.toLowerCase()}`,
+        isNull(posts.parentId),
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
     ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
 }
 
 /** Replies by one author, for the Replies tab. */
@@ -263,15 +378,18 @@ export async function getRepliesByAuthor({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    and(
-      eq(user.username, authorUsername),
-      isNotNull(posts.parentId),
-      cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      and(
+        sql`lower(${user.username}) = ${authorUsername.toLowerCase()}`,
+        isNotNull(posts.parentId),
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
     ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
 }
 
 /**
@@ -293,14 +411,17 @@ export async function getLikedPosts({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    and(
-      sql`exists (select 1 from ${likes} l where l.post_id = ${posts.id} and l.user_id = ${viewerId})`,
-      cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      and(
+        sql`exists (select 1 from ${likes} l where l.post_id = ${posts.id} and l.user_id = ${viewerId})`,
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
     ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
 }
 
 /**
@@ -321,14 +442,117 @@ export async function searchPosts({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    and(
-      sql`${posts.searchVector} @@ websearch_to_tsquery('english', ${query})`,
-      cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      and(
+        sql`${posts.searchVector} @@ websearch_to_tsquery('english', ${query})`,
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
     ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
+}
+
+/** Posts carrying one hashtag, newest first. Powers `/explore/hashtag/[tag]`. */
+export async function getPostsByHashtag({
+  tag,
+  cursor: rawCursor,
+  limit,
+  viewerId = null,
+}: {
+  tag: string;
+  cursor?: string | null;
+  limit: number;
+  viewerId?: string | null;
+}): Promise<FeedPage> {
+  const cursor = decodeCursor(rawCursor);
+  const rows = await selectFeed(
+    excludeBlocked(
+      and(
+        sql`exists (
+          select 1 from ${postHashtags} ph
+          join ${hashtags} h on h.id = ph.hashtag_id
+          where ph.post_id = ${posts.id} and h.tag = ${tag.toLowerCase()}
+        )`,
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
+    ),
+    limit,
+    viewerId,
+  );
+  return toPage(rows, limit, viewerId);
+}
+
+export interface TrendingTag {
+  tag: string;
+  postCount24h: number;
+}
+
+/**
+ * Hashtags with the most posts in the last 24 hours.
+ *
+ * Counted from the join rows rather than `hashtags.post_count`, which is an
+ * all-time denormalized counter with no time dimension. Twenty-four hours is
+ * the window because trending means "right now", not "ever".
+ */
+export async function getTrendingHashtags(limit: number): Promise<TrendingTag[]> {
+  // `db.execute` returns a Result proxy, not an Array - spread it first.
+  const rows = [
+    ...(await db.execute<{ tag: string; n: number }>(sql`
+      select h.tag as tag, count(*)::int as n
+      from ${postHashtags} ph
+      join ${hashtags} h on h.id = ph.hashtag_id
+      join ${posts} p on p.id = ph.post_id
+      where p.created_at > now() - interval '24 hours'
+      group by h.tag
+      order by n desc, h.tag asc
+      limit ${limit}
+    `)),
+  ];
+  return rows.map((row) => ({ tag: row.tag, postCount24h: row.n }));
+}
+
+export interface UserResult {
+  id: string;
+  username: string;
+  name: string;
+  image: string | null;
+  bio: string | null;
+}
+
+/**
+ * People matching a search string, by username prefix first, then name.
+ *
+ * Bounded and ordered deterministically. This is the "users" half of search;
+ * posts are `searchPosts` above.
+ */
+export async function searchUsers({
+  query,
+  limit,
+}: {
+  query: string;
+  limit: number;
+}): Promise<UserResult[]> {
+  const q = query.trim().toLowerCase();
+  if (!q) return [];
+  const rows = await db
+    .select({
+      id: user.id,
+      username: user.username,
+      name: user.name,
+      image: user.image,
+      bio: user.bio,
+    })
+    .from(user)
+    .where(
+      sql`lower(${user.username}) like ${`${q}%`} or lower(${user.name}) like ${`%${q}%`}`,
+    )
+    .orderBy(asc(user.username))
+    .limit(limit);
+  return [...rows];
 }
 
 /** Exists check for the action's quotedPostId validation. */
@@ -364,14 +588,17 @@ export async function getBookmarkedPosts({
 }): Promise<FeedPage> {
   const cursor = decodeCursor(rawCursor);
   const rows = await selectFeed(
-    and(
-      sql`exists (select 1 from ${bookmarks} b where b.post_id = ${posts.id} and b.user_id = ${viewerId})`,
-      cursor ? keysetPredicate(cursor) : undefined,
+    excludeBlocked(
+      and(
+        sql`exists (select 1 from ${bookmarks} b where b.post_id = ${posts.id} and b.user_id = ${viewerId})`,
+        cursor ? keysetPredicate(cursor) : undefined,
+      ),
+      viewerId,
     ),
     limit,
     viewerId,
   );
-  return toPage(rows, limit);
+  return toPage(rows, limit, viewerId);
 }
 
 /**
@@ -390,32 +617,43 @@ export async function getPostById({
   viewerId?: string | null;
 }): Promise<FeedPost | null> {
   const rows = await selectFeed(eq(posts.id, id), 1, viewerId);
-  return rows[0] ? toFeedPost(rows[0]) : null;
+  return rows[0] ? toFeedPost(rows[0], viewerId === null) : null;
 }
 
-/** How many replies a detail page shows before it stops. */
+/** How many replies a detail page shows per chunk. */
 export const REPLY_LIMIT = 20;
 
 /**
- * Direct replies to one post, oldest first.
+ * Direct replies to one post, oldest first, keyset-paginated.
  *
- * `selectFeed` always orders newest-first, so this reverses after the fact
- * rather than parameterising the direction. A thread reads bottom-to-top, and
- * reversing in memory keeps the keyset cursor in `toPage()` pointing one way for
- * every caller - a second ordering would mean a cursor that is only valid for
- * one of the two orders.
- *
- * Truncated to `REPLY_LIMIT` rather than paginated. A "Load more replies" link
- * needs a second cursor on a page that is itself the result of a cursor, which
- * is Phase 4 work along with the rest of the thread UI.
+ * Ascending rather than descending: page one is the *start* of the thread, and
+ * "Show more replies" walks forward toward the newest. The cursor travels as
+ * `?repliesCursor=`, which cannot collide with anything because the detail
+ * page itself is addressed by id, not by cursor.
  */
 export async function getReplies({
   parentId,
+  cursor: rawCursor,
+  limit,
   viewerId = null,
 }: {
   parentId: number;
+  cursor?: string | null;
+  limit: number;
   viewerId?: string | null;
-}): Promise<FeedPost[]> {
-  const rows = await selectFeed(eq(posts.parentId, parentId), REPLY_LIMIT, viewerId);
-  return rows.slice(0, REPLY_LIMIT).reverse().map(toFeedPost);
+}): Promise<FeedPage> {
+  const cursor = decodeCursor(rawCursor);
+  const rows = await selectFeed(
+    excludeBlocked(
+      and(
+        eq(posts.parentId, parentId),
+        cursor ? keysetPredicate(cursor, "asc") : undefined,
+      ),
+      viewerId,
+    ),
+    limit,
+    viewerId,
+    "asc",
+  );
+  return toPage(rows, limit, viewerId);
 }

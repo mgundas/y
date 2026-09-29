@@ -41,18 +41,15 @@ export function PostContent({
               </Link>
             );
           case "hashtag":
-            // Deliberately not a <Link> yet. `/explore/hashtag/[tag]` is Phase 7,
-            // so linking here would render a live-looking control that 404s.
-            // `tokenizePost` already yields the bare lowercase tag, so Phase 7
-            // only has to swap this span for a Link - nothing upstream changes.
             return (
-              <span
+              <Link
                 key={key}
-                title={`Posts tagged #${segment.tag} - hashtag search arrives in a later phase`}
-                className="font-medium text-primary"
+                href={`/explore/hashtag/${segment.tag}`}
+                title={`Posts tagged #${segment.tag}`}
+                className="font-medium text-primary hover:underline"
               >
                 {segment.value}
-              </span>
+              </Link>
             );
           case "url":
             return (

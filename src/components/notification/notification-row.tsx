@@ -1,3 +1,4 @@
+import Link from "next/link";
 import {
   AtSign,
   Heart,
@@ -101,12 +102,17 @@ export function NotificationRow({ item }: { item: NotificationItem }) {
           </p>
 
           {item.post && (
-            <a
+            // `Link`, not `<a>`: a full reload on every notification tap would
+            // throw away the client router state for no reason. The accessible
+            // name is the full post text, since the truncated preview is what
+            // sighted users see but not what is announced.
+            <Link
               href={`/${item.post.authorUsername}/status/${item.post.id}`}
-              className="mt-1 block truncate text-sm text-muted-foreground hover:underline"
+              aria-label={item.post.content}
+              className="mt-1 block truncate text-sm text-muted-foreground hover:underline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring"
             >
               {item.post.content}
-            </a>
+            </Link>
           )}
         </div>
       </div>

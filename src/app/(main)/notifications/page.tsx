@@ -1,4 +1,5 @@
 import type { Metadata } from "next";
+import Link from "next/link";
 
 import { MarkAllReadButton } from "@/components/notification/mark-all-read-button";
 import { NotificationRow } from "@/components/notification/notification-row";
@@ -8,8 +9,18 @@ import {
   getNotifications,
   getUnreadNotificationCount,
 } from "@/lib/db/queries/notifications";
+import { cn } from "@/lib/utils";
 
 export const metadata: Metadata = { title: "Notifications" };
+
+const FILTERS = [
+  { value: null, label: "All" },
+  { value: "reply", label: "Replies" },
+  { value: "mention", label: "Mentions" },
+  { value: "like", label: "Likes" },
+  { value: "repost", label: "Reposts" },
+  { value: "follow", label: "Follows" },
+] as const;
 
 /**
  * Protected route. Two independent checks:
@@ -25,18 +36,25 @@ export const metadata: Metadata = { title: "Notifications" };
 export default async function NotificationsPage({
   searchParams,
 }: {
-  searchParams: Promise<{ cursor?: string; limit?: string }>;
+  searchParams: Promise<{ cursor?: string; limit?: string; type?: string }>;
 }) {
-  const { cursor, limit: rawLimit } = await searchParams;
+  const { cursor, limit: rawLimit, type: rawType } = await searchParams;
   const limit = clampPageSize(rawLimit);
 
   const session = await requireSession();
   const viewerId = session.user.id;
 
   const [page, unread] = await Promise.all([
-    getNotifications({ viewerId, cursor, limit }),
+    // Unknown `?type=` values fall through to unfiltered inside the query,
+    // and the strip below highlights nothing - a bad URL shows everything
+    // rather than an empty list.
+    getNotifications({ viewerId, cursor, limit, type: rawType }),
     getUnreadNotificationCount(viewerId),
   ]);
+
+  const activeType = FILTERS.some((filter) => filter.value === rawType)
+    ? rawType
+    : null;
 
   return (
     <div>
@@ -49,6 +67,35 @@ export default async function NotificationsPage({
         */}
         <MarkAllReadButton disabled={unread === 0} />
       </header>
+
+      <nav
+        aria-label="Filter notifications"
+        className="flex gap-1 overflow-x-auto border-b border-border px-4 py-2"
+      >
+        {FILTERS.map((filter) => {
+          const active = activeType === filter.value;
+          const href =
+            filter.value === null
+              ? "/notifications"
+              : `/notifications?type=${filter.value}`;
+          return (
+            <Link
+              key={filter.label}
+              href={href}
+              aria-current={active ? "page" : undefined}
+              className={cn(
+                "shrink-0 rounded-full px-3 py-1 text-sm transition-colors",
+                "focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
+                active
+                  ? "bg-foreground font-semibold text-background"
+                  : "text-muted-foreground hover:bg-accent hover:text-foreground",
+              )}
+            >
+              {filter.label}
+            </Link>
+          );
+        })}
+      </nav>
 
       {page.items.length === 0 ? (
         <p className="px-4 py-10 text-sm text-muted-foreground">
@@ -75,7 +122,7 @@ export default async function NotificationsPage({
           <a
             href={`/notifications?cursor=${encodeURIComponent(
               page.nextCursor,
-            )}&limit=${limit}`}
+            )}&limit=${limit}${activeType ? `&type=${activeType}` : ""}`}
             className="text-sm text-muted-foreground hover:underline"
           >
             Show more

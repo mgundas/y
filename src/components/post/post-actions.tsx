@@ -3,7 +3,8 @@
 import Link from "next/link";
 import { useRouter } from "next/navigation";
 import { useOptimistic, useTransition } from "react";
-import { Bookmark, Heart, MessageCircle, Repeat2 } from "lucide-react";
+import { Bookmark, Heart, MessageCircle, Quote, Repeat2 } from "lucide-react";
+import { toast } from "sonner";
 
 import {
   toggleEngagementAction,
@@ -36,6 +37,8 @@ export function PostActions({
   postId,
   replyHref,
   replyCount,
+  quoteHref,
+  quoteCount,
   signedIn,
   liked,
   likeCount,
@@ -47,6 +50,9 @@ export function PostActions({
   postId: number;
   replyHref: string;
   replyCount: number;
+  /** Quote page for this post. A link, not a toggle - quoting writes a post. */
+  quoteHref: string;
+  quoteCount: number;
   signedIn: boolean;
   liked: boolean;
   likeCount: number;
@@ -62,6 +68,13 @@ export function PostActions({
         icon={MessageCircle}
         count={replyCount}
         label="replies"
+        highlight={false}
+      />
+      <ActionLink
+        href={quoteHref}
+        icon={Quote}
+        count={quoteCount}
+        label="quotes"
         highlight={false}
       />
       <ToggleButton
@@ -145,7 +158,13 @@ function ToggleButton({
       // The reducer takes no meaningful argument, so `undefined` is passed
       // explicitly; React's `useOptimistic` types require one.
       addOptimistic(undefined);
-      await toggleEngagementAction(kind, postId);
+      // A failed toggle visibly reverts when the transition ends - but a
+      // silent revert reads as "the button is broken", so the failure toasts
+      // with the server's sentence instead of disappearing.
+      const result = await toggleEngagementAction(kind, postId);
+      if (!result.ok) {
+        toast.error(result.message);
+      }
       // The action revalidates "/", which does not cover a post shown on
       // `/{username}/status/{id}` or on /bookmarks. Refreshing explicitly is
       // what makes every page settle on the server's numbers.

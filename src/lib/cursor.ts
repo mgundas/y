@@ -13,10 +13,14 @@ import { z } from "zod";
  * bigserial precisely so that tiebreaker is monotonic and deterministic.
  */
 const cursorSchema = z.object({
-  /** ISO 8601 instant. */
+  /** ISO 8601 instant, always UTC - `toISOString()` is the only encoder. */
   t: z.iso.datetime(),
-  /** bigserial, parsed as a JS number - safe well past any realistic post id. */
-  i: z.number().int().positive(),
+  /**
+   * bigserial, parsed as a JS number. Capped at `MAX_SAFE_INTEGER`: a
+   * hand-edited cursor past 2^53 would compare wrong in JS and silently
+   * mis-page, so it degrades to page one instead.
+   */
+  i: z.number().int().positive().max(Number.MAX_SAFE_INTEGER),
 });
 
 export type Cursor = z.infer<typeof cursorSchema>;

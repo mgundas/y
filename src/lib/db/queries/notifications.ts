@@ -2,10 +2,12 @@ import "server-only";
 
 import { alias } from "drizzle-orm/pg-core";
 import { and, count, desc, eq, isNull, sql, type SQL } from "drizzle-orm";
+import { z } from "zod";
 
 import { decodeCursor, encodeCursor, type Cursor } from "@/lib/cursor";
 import { db } from "@/lib/db";
 import {
+  notificationType,
   notifications,
   posts,
   user,
@@ -36,12 +38,17 @@ export interface NotificationInput {
 /**
  * Records notifications for one event.
  *
- * Two filters, both of which matter:
+ * Three guards, each catching what the others cannot:
  * - Nobody is notified about their own actions. A user liking their own post is
  *   already looking at it.
- * - Duplicates within a batch are dropped. Replying to someone *and* mentioning
- *   them in the same post would otherwise produce two identical rows, and
- *   `notifications` has no unique constraint to catch that.
+ * - Duplicates within a batch are dropped in memory. Replying to someone *and*
+ *   mentioning them in the same post must still produce both rows (different
+ *   types), so the key includes the type.
+ * - `onConflictDoNothing` against `notifications_dedup_unique` catches the
+ *   cross-request race: two transactions from a double-clicked button each pass
+ *   the in-memory filter, and the loser is dropped by the constraint instead of
+ *   inserting a twin row. Bare (no target) so it also covers the NULL `post_id`
+ *   on follows, where an inference target would not match.
  */
 export async function notify(
   tx: Tx,
@@ -50,14 +57,14 @@ export async function notify(
   const seen = new Set<string>();
   const unique = rows.filter((row) => {
     if (row.userId === row.actorId) return false;
-    const key = `${row.userId}:${row.type}:${row.postId ?? "-"}`;
+    const key = `${row.userId}:${row.type}:${row.postId ?? "-"}:${row.actorId}`;
     if (seen.has(key)) return false;
     seen.add(key);
     return true;
   });
 
   if (unique.length === 0) return;
-  await tx.insert(notifications).values(unique);
+  await tx.insert(notifications).values(unique).onConflictDoNothing();
 }
 
 const actorUser = alias(user, "actor_user");
@@ -98,16 +105,23 @@ function notificationKeyset(cursor: Cursor): SQL {
  * shape to support. Both joins are on a primary key, so neither can fan out the
  * row count.
  */
+/** Accepted `?type=` values. Validated, not cast - an unknown type shows all. */
+const notificationTypeSchema = z.enum(notificationType.enumValues);
+
 export async function getNotifications({
   viewerId,
   cursor: rawCursor,
   limit,
+  type: rawType,
 }: {
   viewerId: string;
   cursor?: string | null;
   limit: number;
+  /** Optional per-type filter from `?type=`. Unknown values show everything. */
+  type?: string | null;
 }): Promise<NotificationPage> {
   const cursor = decodeCursor(rawCursor);
+  const type = notificationTypeSchema.safeParse(rawType).data;
 
   const rows = await db
     .select({
@@ -132,6 +146,7 @@ export async function getNotifications({
     .where(
       and(
         eq(notifications.userId, viewerId),
+        type ? eq(notifications.type, type) : undefined,
         cursor ? notificationKeyset(cursor) : undefined,
       ),
     )
@@ -193,15 +208,24 @@ export async function getUnreadNotificationCount(
   return row?.n ?? 0;
 }
 
-/** Marks the viewer's unread notifications as read. */
+/**
+ * Marks the viewer's unread notifications as read.
+ *
+ * A CTE returning only the count, not `RETURNING id`: a large inbox would
+ * otherwise lock the rows and ship every id back just to count them. One
+ * statement, one number.
+ */
 export async function markAllRead(viewerId: string): Promise<number> {
-  const rows = await db
-    .update(notifications)
-    .set({ readAt: new Date() })
-    .where(
-      and(eq(notifications.userId, viewerId), isNull(notifications.readAt)),
+  const [row] = await db.execute<{ marked: number }>(sql`
+    with updated as (
+      update ${notifications}
+      set read_at = now()
+      where ${notifications.userId} = ${viewerId}
+        and ${notifications.readAt} is null
+      returning 1
     )
-    .returning({ id: notifications.id });
+    select count(*)::int as marked from updated
+  `);
 
-  return rows.length;
+  return row?.marked ?? 0;
 }

@@ -21,11 +21,26 @@ function SubmitButton() {
   );
 }
 
-export function SignInForm() {
+function FieldError({ id, errors }: { id: string; errors?: string[] }) {
+  if (!errors?.length) return null;
+  return (
+    <p id={id} className="text-sm text-destructive">
+      {errors[0]}
+    </p>
+  );
+}
+
+export function SignInForm({ callbackUrl }: { callbackUrl?: string }) {
   const [state, formAction] = useActionState(signInAction, initialState);
 
   return (
     <form action={formAction} className="flex flex-col gap-4">
+      {/* Bounces back to the deep link after login. Validated server-side;
+          anything but a same-origin path falls back to `/`. */}
+      {callbackUrl ? (
+        <input type="hidden" name="callbackUrl" value={callbackUrl} />
+      ) : null}
+
       {state?.message ? (
         <p
           role="alert"
@@ -43,8 +58,10 @@ export function SignInForm() {
           type="email"
           autoComplete="email"
           required
+          aria-describedby={state?.errors?.email ? "email-error" : undefined}
           aria-invalid={state?.errors?.email ? true : undefined}
         />
+        <FieldError id="email-error" errors={state?.errors?.email} />
       </div>
 
       <div className="flex flex-col gap-2">
@@ -55,7 +72,12 @@ export function SignInForm() {
           type="password"
           autoComplete="current-password"
           required
+          aria-describedby={
+            state?.errors?.password ? "password-error" : undefined
+          }
+          aria-invalid={state?.errors?.password ? true : undefined}
         />
+        <FieldError id="password-error" errors={state?.errors?.password} />
       </div>
 
       <SubmitButton />

@@ -46,7 +46,11 @@ export const auth = betterAuth({
       // rejects any create that omits it. `input: true` lets it arrive in the
       // sign-up body.
       username: { type: "string", required: true, input: true },
-      bio: { type: "string", required: false, input: true },
+      // Never accepted straight from a client form: the sign-up action only
+      // forwards email/password/name/username, and bio is edited later through
+      // the authenticated settings action. `input: true` here would let a
+      // direct `POST /api/auth/sign-up/email` smuggle a bio past that.
+      bio: { type: "string", required: false, input: false },
       // Set by a server action, never accepted straight from a client form.
       bannerUrl: { type: "string", required: false, input: false },
     },

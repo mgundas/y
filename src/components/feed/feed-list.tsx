@@ -16,6 +16,7 @@ export function FeedList({
   emptyMessage,
   limit,
   signedIn = false,
+  viewerUsername = null,
   basePath = "/",
   query = {},
 }: {
@@ -23,6 +24,12 @@ export function FeedList({
   emptyMessage: string;
   limit: number;
   signedIn?: boolean;
+  /**
+   * Decides per-card delete affordance (`canDelete`), computed here - in the
+   * server render - rather than in the client, so the button's presence never
+   * depends on client state. The action re-checks authorship regardless.
+   */
+  viewerUsername?: string | null;
   /** The route this list lives on, so "Load more" stays on it. */
   basePath?: string;
   /**
@@ -57,7 +64,15 @@ export function FeedList({
       <ul>
         {page.posts.map((post) => (
           <li key={post.id}>
-            <PostCard post={post} now={now} signedIn={signedIn} />
+            <PostCard
+              post={post}
+              now={now}
+              signedIn={signedIn}
+              canDelete={
+                viewerUsername !== null &&
+                viewerUsername === post.author.username
+              }
+            />
           </li>
         ))}
       </ul>

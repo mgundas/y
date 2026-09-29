@@ -64,35 +64,44 @@ export default async function ProfilePage({
   const profile = await getProfileByUsername({ username, viewerId });
   if (!profile) notFound();
 
+  // Either direction of a block hides the timeline, so there is nothing to
+  // fetch for it - no counts, no tab content. Checked before any of that work.
+  const blocked = profile.blockedByViewer || profile.blockingViewer;
+
   // A Likes tab is only ever rendered on your own profile, so asking for it on
   // someone else's is a bad URL rather than a missing permission: it falls back
   // to Posts instead of 404ing.
   const effectiveTab: ProfileTab =
     tab === "likes" && !profile.isSelf ? "posts" : tab;
 
-  const counts = await getProfileTabCounts({
-    authorId: profile.id,
-    isSelf: profile.isSelf,
-  });
-
-  const page =
-    effectiveTab === "replies"
-      ? await getRepliesByAuthor({
-          authorUsername: profile.username,
-          cursor,
-          limit,
-          viewerId,
-        })
-      : effectiveTab === "likes"
-        ? // `isSelf` is true here, so `profile.id` is the viewer and this is
-          // their own private list.
-          await getLikedPosts({ viewerId: profile.id, cursor, limit })
-        : await getPostsByAuthor({
-            authorUsername: profile.username,
-            cursor,
-            limit,
-            viewerId,
-          });
+  // Counts and tab content in parallel: both need the profile, but neither
+  // needs the other. What stays sequential is session -> profile, because the
+  // profile query needs the viewer id for its follow/block edges.
+  const [counts, page] = blocked
+    ? [null, null]
+    : await Promise.all([
+        getProfileTabCounts({
+          authorId: profile.id,
+          isSelf: profile.isSelf,
+        }),
+        effectiveTab === "replies"
+          ? getRepliesByAuthor({
+              authorUsername: profile.username,
+              cursor,
+              limit,
+              viewerId,
+            })
+          : effectiveTab === "likes"
+            ? // `isSelf` is true here, so `profile.id` is the viewer and this is
+              // their own private list.
+              getLikedPosts({ viewerId: profile.id, cursor, limit })
+            : getPostsByAuthor({
+                authorUsername: profile.username,
+                cursor,
+                limit,
+                viewerId,
+              }),
+      ]);
 
   const emptyMessage =
     effectiveTab === "replies"
@@ -101,6 +110,10 @@ export default async function ProfilePage({
         ? "No liked posts yet."
         : "No posts yet.";
 
+  // The header still renders (identity is not secret), but tabs and posts do
+  // not - that is the entire point of blocking. Which sentence shows depends
+  // on the direction, because "you blocked them" calls for the Unblock control
+  // in the header while "they blocked you" calls for nothing at all.
   return (
     <div>
       <header className="sticky top-0 z-10 flex h-14 items-center border-b border-border bg-background/80 px-4 backdrop-blur">
@@ -109,21 +122,32 @@ export default async function ProfilePage({
 
       <ProfileHeader profile={profile} signedIn={Boolean(viewer)} />
 
-      <ProfileTabs
-        username={profile.username}
-        active={effectiveTab}
-        counts={counts}
-      />
+      {blocked || !counts || !page ? (
+        <p className="px-4 py-10 text-center text-sm text-muted-foreground">
+          {profile.blockedByViewer
+            ? `You blocked @${profile.username}. Unblock to see their posts.`
+            : `@${profile.username} has blocked you.`}
+        </p>
+      ) : (
+        <>
+          <ProfileTabs
+            username={profile.username}
+            active={effectiveTab}
+            counts={counts}
+          />
 
-      <FeedList
-        page={page}
-        limit={limit}
-        signedIn={Boolean(viewer)}
-        basePath={`/${profile.username}`}
-        // Posts is the default, so its link stays clean at `/{username}`.
-        query={effectiveTab === "posts" ? {} : { tab: effectiveTab }}
-        emptyMessage={emptyMessage}
-      />
+          <FeedList
+            page={page}
+            limit={limit}
+            signedIn={Boolean(viewer)}
+            viewerUsername={viewer?.username ?? null}
+            basePath={`/${profile.username}`}
+            // Posts is the default, so its link stays clean at `/{username}`.
+            query={effectiveTab === "posts" ? {} : { tab: effectiveTab }}
+            emptyMessage={emptyMessage}
+          />
+        </>
+      )}
     </div>
   );
 }

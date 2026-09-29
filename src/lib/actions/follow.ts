@@ -5,9 +5,13 @@ import { and, eq, sql } from "drizzle-orm";
 
 import { getCurrentUser } from "@/lib/auth/session";
 import { db } from "@/lib/db";
-import { follows, user } from "@/lib/db/schema";
+import { blocks, follows, user } from "@/lib/db/schema";
 import { notify } from "@/lib/db/queries/notifications";
+import { checkMutationRateLimit } from "@/lib/ratelimit";
 import { usernameSchema } from "@/lib/validation/auth";
+
+/** Same pattern as the engagement and post actions: read vs broken. */
+class FollowValidationError extends Error {}
 
 /**
  * Follow / unfollow.
@@ -36,28 +40,58 @@ export async function toggleFollowAction(
   }
   const username = parsed.data;
 
-  const targets = await db
-    .select({ id: user.id })
-    .from(user)
-    .where(eq(user.username, username))
-    .limit(1);
-  const target = targets[0];
-
-  if (!target) {
-    return { ok: false, message: "That account no longer exists." };
-  }
-
-  // `follows` has `CHECK (follower_id <> following_id)`, so a self-follow would
-  // be rejected by the database too. Rejecting it here means the user gets a
-  // sentence instead of a generic failure, and the button does not have to be
-  // hidden for the check to hold.
-  if (target.id === viewer.id) {
-    return { ok: false, message: "You cannot follow yourself." };
+  // Fifty follows an hour per user. Follow-spam is the cheapest form of
+  // harassment here, and the budget is high enough no real user notices it.
+  const allowed = await checkMutationRateLimit({
+    userId: viewer.id,
+    scope: "follow",
+    windowSeconds: 3600,
+    max: 50,
+  });
+  if (!allowed) {
+    return { ok: false, message: "You're following too fast. Slow down." };
   }
 
   let result: FollowState;
   try {
     result = await db.transaction(async (tx): Promise<FollowState> => {
+      // Case-insensitive, like the profile lookup: the follow button lives on
+      // `/{username}`, which resolves re-cased URLs, so the action must too
+      // instead of 404ing where the page renders. Read inside the transaction
+      // so a deleted account cannot slip between the check and the write.
+      const targets = await tx
+        .select({ id: user.id, username: user.username })
+        .from(user)
+        .where(sql`lower(${user.username}) = ${username}`)
+        .limit(1);
+      const target = targets[0];
+
+      if (!target) {
+        throw new FollowValidationError("That account no longer exists.");
+      }
+
+      // `follows` has `CHECK (follower_id <> following_id)`, so a self-follow
+      // would be rejected by the database too. Rejecting it here means the
+      // user gets a sentence instead of a generic failure, and the button does
+      // not have to be hidden for the check to hold.
+      if (target.id === viewer.id) {
+        throw new FollowValidationError("You cannot follow yourself.");
+      }
+
+      // A block in either direction forbids the follow. Same sentence as a
+      // missing account, so neither side's block state leaks to the other.
+      const blockRows = await tx
+        .select({ blockerId: blocks.blockerId })
+        .from(blocks)
+        .where(
+          sql`(${blocks.blockerId} = ${viewer.id} and ${blocks.blockedId} = ${target.id})
+            or (${blocks.blockerId} = ${target.id} and ${blocks.blockedId} = ${viewer.id})`,
+        )
+        .limit(1);
+      if (blockRows.length > 0) {
+        throw new FollowValidationError("That account no longer exists.");
+      }
+
       const removed = await tx
         .delete(follows)
         .where(
@@ -117,6 +151,9 @@ export async function toggleFollowAction(
       };
     });
   } catch (error) {
+    if (error instanceof FollowValidationError) {
+      return { ok: false, message: error.message };
+    }
     console.error("toggle follow failed", error);
     return { ok: false, message: "Could not save that. Please try again." };
   }

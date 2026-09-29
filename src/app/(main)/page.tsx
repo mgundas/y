@@ -21,6 +21,10 @@ export default async function HomePage({
   const { cursor, limit: rawLimit } = await searchParams;
   const limit = clampPageSize(rawLimit);
 
+  // Sequential on purpose: the feed query needs the viewer id for its
+  // like/repost/bookmark edges, so it genuinely depends on the session.
+  // Fetching the feed twice (once anonymous, once as the viewer) to fake
+  // parallelism would cost a whole second query to save one session lookup.
   const user = await getCurrentUser();
   const page = await getFeedPosts({
     cursor,
@@ -53,6 +57,7 @@ export default async function HomePage({
         page={page}
         limit={limit}
         signedIn={Boolean(user)}
+        viewerUsername={user?.username ?? null}
         emptyMessage={
           user
             ? "No posts yet. Write the first one."

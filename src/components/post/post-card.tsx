@@ -8,6 +8,7 @@ import {
 } from "@/lib/text";
 import { cn } from "@/lib/utils";
 
+import { DeletePostButton } from "./delete-post-button";
 import { PostActions } from "./post-actions";
 import { PostContent } from "./post-content";
 
@@ -39,10 +40,17 @@ export function PostCard({
   post,
   now = new Date(),
   signedIn = false,
+  canDelete = false,
 }: {
   post: FeedPost;
   now?: Date;
   signedIn?: boolean;
+  /**
+   * Owner-only deletion. Computed server-side (viewer id vs author id), never
+   * in the client - the button's presence is convenience, `deletePostAction`'s
+   * author check is the guard.
+   */
+  canDelete?: boolean;
 }) {
   const iso = post.createdAt.toISOString();
 
@@ -98,9 +106,38 @@ export function PostCard({
 
         <PostContent content={post.content} className="mt-0.5" />
 
+        {post.images.length > 0 ? (
+          // Plain <img>, not next/image: media URLs are arbitrary user-supplied
+          // hosts, which cannot be allowlisted in `remotePatterns`. An image
+          // optimization proxy is later work; unoptimized <img> with lazy
+          // loading is the honest interim.
+          <div
+            className={cn(
+              "mt-3 grid gap-2 overflow-hidden rounded-xl border border-border",
+              post.images.length > 1 && "grid-cols-2",
+            )}
+          >
+            {post.images.map((image) => (
+              // Media URLs are arbitrary user-supplied hosts, unallowlistable
+              // in remotePatterns; see the note above.
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                key={image.url}
+                src={image.url}
+                alt={image.altText ?? ""}
+                loading="lazy"
+                className="h-full max-h-96 w-full object-cover"
+              />
+            ))}
+          </div>
+        ) : null}
+
         {post.quoted ? (
           <Link
-            href={`/${post.quoted.authorUsername}`}
+            // The quoted *post*, not its author. Linking the profile made the
+            // reference unreachable - a quote card that cannot reach the quote.
+            href={`/${post.quoted.authorUsername}/status/${post.quoted.id}`}
+            aria-label={`Quoted post by @${post.quoted.authorUsername}`}
             className={cn(
               "mt-3 block rounded-xl border border-border p-3 transition-colors",
               "hover:bg-accent/40 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-ring",
@@ -121,18 +158,29 @@ export function PostCard({
           </Link>
         ) : null}
 
-        <PostActions
-          postId={post.id}
-          replyHref={`/${post.author.username}/status/${post.id}`}
-          replyCount={post.replyCount}
-          signedIn={signedIn}
-          liked={post.likedByViewer}
-          likeCount={post.likeCount}
-          reposted={post.repostedByViewer}
-          repostCount={post.repostCount}
-          bookmarked={post.bookmarkedByViewer}
-          bookmarkCount={post.bookmarkCount}
-        />
+        <div className="flex items-center justify-between">
+          <div className="min-w-0 flex-1">
+            <PostActions
+              postId={post.id}
+              replyHref={`/${post.author.username}/status/${post.id}`}
+              replyCount={post.replyCount}
+              quoteHref={`/quote/${post.id}`}
+              quoteCount={post.quoteCount}
+              signedIn={signedIn}
+              liked={post.likedByViewer}
+              likeCount={post.likeCount}
+              reposted={post.repostedByViewer}
+              repostCount={post.repostCount}
+              bookmarked={post.bookmarkedByViewer}
+              bookmarkCount={post.bookmarkCount}
+            />
+          </div>
+          {canDelete ? (
+            <div className="mt-2 shrink-0">
+              <DeletePostButton postId={post.id} />
+            </div>
+          ) : null}
+        </div>
       </div>
     </article>
   );

@@ -76,7 +76,11 @@ export function SignUpForm() {
             pattern="[A-Za-z0-9_]+"
             className="pl-7"
             placeholder="adalovelace"
-            aria-describedby="username-hint"
+            aria-describedby={
+              state?.errors?.username
+                ? "username-hint username-error"
+                : "username-hint"
+            }
             aria-invalid={state?.errors?.username ? true : undefined}
           />
         </div>

@@ -2,6 +2,7 @@
 
 import { useRouter } from "next/navigation";
 import { useOptimistic, useTransition } from "react";
+import { toast } from "sonner";
 
 import { toggleFollowAction } from "@/lib/actions/follow";
 import { formatCount } from "@/lib/text";
@@ -54,7 +55,10 @@ export function FollowButton({
 
     startTransition(async () => {
       addOptimistic(undefined);
-      await toggleFollowAction(username);
+      const result = await toggleFollowAction(username);
+      if (!result.ok) {
+        toast.error(result.message);
+      }
       router.refresh();
     });
   }

@@ -2,6 +2,7 @@ import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import type { Profile } from "@/lib/db/queries/profile";
 import { formatCount, formatJoinMonth } from "@/lib/text";
 
+import { BlockButton } from "./block-button";
 import { FollowButton } from "./follow-button";
 
 function initials(name: string): string {
@@ -59,15 +60,32 @@ export function ProfileHeader({
           </div>
 
           {/* A profile cannot follow itself, and `follows` has a CHECK that says
-              so. Hiding the control is the readable version of that constraint. */}
+              so. Hiding the control is the readable version of that constraint.
+              A blocked profile shows Unblock instead of Follow: the follow
+              action would reject anyway, and offering it would be a dead end. */}
           {profile.isSelf ? null : (
-            <div className="pt-3">
-              <FollowButton
-                username={profile.username}
-                signedIn={signedIn}
-                following={profile.followedByViewer}
-                followerCount={profile.followerCount}
-              />
+            <div className="flex gap-2 pt-3">
+              {profile.blockedByViewer ? (
+                <BlockButton
+                  username={profile.username}
+                  signedIn={signedIn}
+                  blocking
+                />
+              ) : profile.blockingViewer ? null : (
+                <>
+                  <FollowButton
+                    username={profile.username}
+                    signedIn={signedIn}
+                    following={profile.followedByViewer}
+                    followerCount={profile.followerCount}
+                  />
+                  <BlockButton
+                    username={profile.username}
+                    signedIn={signedIn}
+                    blocking={false}
+                  />
+                </>
+              )}
             </div>
           )}
         </div>

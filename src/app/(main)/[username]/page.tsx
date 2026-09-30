@@ -97,6 +97,7 @@ export default async function ProfilePage({
               getLikedPosts({ viewerId: profile.id, cursor, limit })
             : getPostsByAuthor({
                 authorUsername: profile.username,
+                authorId: profile.id,
                 cursor,
                 limit,
                 viewerId,
@@ -141,6 +142,13 @@ export default async function ProfilePage({
             limit={limit}
             signedIn={Boolean(viewer)}
             viewerUsername={viewer?.username ?? null}
+            // Every repost on this timeline is the owner's, so name them -
+            // "You reposted" is only correct when the viewer is the owner.
+            repostLabel={
+              profile.isSelf
+                ? "You reposted"
+                : `@${profile.username} reposted`
+            }
             basePath={`/${profile.username}`}
             // Posts is the default, so its link stays clean at `/{username}`.
             query={effectiveTab === "posts" ? {} : { tab: effectiveTab }}

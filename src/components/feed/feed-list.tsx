@@ -17,6 +17,7 @@ export function FeedList({
   limit,
   signedIn = false,
   viewerUsername = null,
+  repostLabel = "You reposted",
   basePath = "/",
   query = {},
 }: {
@@ -30,6 +31,12 @@ export function FeedList({
    * depends on client state. The action re-checks authorship regardless.
    */
   viewerUsername?: string | null;
+  /**
+   * Who to name in the "reposted" context line. Defaults to "You reposted",
+   * which is correct everywhere the viewer is the reposter (home, search,
+   * bookmarks); profile pages pass the timeline owner's handle instead.
+   */
+  repostLabel?: string;
   /** The route this list lives on, so "Load more" stays on it. */
   basePath?: string;
   /**
@@ -72,6 +79,7 @@ export function FeedList({
                 viewerUsername !== null &&
                 viewerUsername === post.author.username
               }
+              repostedLabel={post.repostedByViewer ? repostLabel : null}
             />
           </li>
         ))}

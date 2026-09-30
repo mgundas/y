@@ -4,7 +4,7 @@ import { alias } from "drizzle-orm/pg-core";
 import { and, count, eq, sql } from "drizzle-orm";
 
 import { db } from "@/lib/db";
-import { blocks, follows, likes, posts, user } from "@/lib/db/schema";
+import { blocks, follows, likes, posts, reposts, user } from "@/lib/db/schema";
 
 /**
  * Profile reads. Separate from `feed.ts` because these return a `user` row
@@ -113,9 +113,11 @@ export interface ProfileTabCounts {
 /**
  * Tab counts, so the strip cannot disagree with the page under it.
  *
- * Posts and replies come from one grouped query with a `filter` aggregate rather
- * than two counts, and only when the active tab needs them. Likes are counted
- * separately, and only for the owner.
+ * Replies come from a grouped query; posts count *distinct* posts that are
+ * either top-level by the author or reposted by them, which is exactly the
+ * set the Posts tab renders. A repost of one's own post matches both halves
+ * and must count once, hence `count(distinct)`. Likes are counted separately,
+ * and only for the owner.
  */
 export async function getProfileTabCounts({
   authorId,
@@ -126,11 +128,20 @@ export async function getProfileTabCounts({
 }): Promise<ProfileTabCounts> {
   const [row] = await db
     .select({
-      posts: sql<number>`count(*) filter (where ${posts.parentId} is null)::int`,
+      // The join fans out at most one row: `reposts`' PK is (user_id, post_id),
+      // so per post there is at most one of *this* user's repost edges.
+      posts: sql<number>`count(distinct ${posts.id})::int`,
       replies: sql<number>`count(*) filter (where ${posts.parentId} is not null)::int`,
     })
     .from(posts)
-    .where(eq(posts.authorId, authorId));
+    .leftJoin(
+      reposts,
+      and(eq(reposts.postId, posts.id), eq(reposts.userId, authorId)),
+    )
+    .where(
+      sql`(${posts.authorId} = ${authorId} and ${posts.parentId} is null)
+        or ${reposts.postId} is not null`,
+    );
 
   if (!isSelf) {
     return { posts: row?.posts ?? 0, replies: row?.replies ?? 0, likes: null };

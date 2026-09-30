@@ -9,6 +9,7 @@ import {
   inArray,
   isNotNull,
   isNull,
+  or,
   sql,
   type SQL,
 } from "drizzle-orm";
@@ -334,14 +335,26 @@ export async function getFeedPosts({
   return toPage(rows, limit, viewerId);
 }
 
-/** Top-level posts by one author. The Posts tab on a profile (Phase 5). */
+/**
+ * Posts tab on a profile: top-level posts by the author *plus* their reposts.
+ *
+ * Reposts previously surfaced nowhere on profiles - reposting felt like
+ * shouting into the void, which is the bug being fixed. Ordered by post
+ * recency, not repost time, so the keyset cursor stays `(posts.created_at,
+ * posts.id)`: same tradeoff as `/bookmarks`, and reusing `selectFeed` is what
+ * keeps the card identical. A repost of one's own post matches both halves
+ * but is still one row, so it cannot duplicate.
+ */
 export async function getPostsByAuthor({
   authorUsername,
+  authorId,
   cursor: rawCursor,
   limit,
   viewerId = null,
 }: {
   authorUsername: string;
+  /** The profile owner's id. Reposts are keyed off it, not the username. */
+  authorId: string;
   cursor?: string | null;
   limit: number;
   viewerId?: string | null;
@@ -350,10 +363,15 @@ export async function getPostsByAuthor({
   const rows = await selectFeed(
     excludeBlocked(
       and(
-        // Case-insensitive like the profile lookup itself: `/AdaLovelace`
-        // resolves, so its tabs must too instead of 404ing on a re-cased URL.
-        sql`lower(${user.username}) = ${authorUsername.toLowerCase()}`,
-        isNull(posts.parentId),
+        or(
+          and(
+            // Case-insensitive like the profile lookup itself: `/AdaLovelace`
+            // resolves, so its tabs must too instead of 404ing on a re-cased URL.
+            sql`lower(${user.username}) = ${authorUsername.toLowerCase()}`,
+            isNull(posts.parentId),
+          ),
+          sql`exists (select 1 from ${reposts} r where r.post_id = ${posts.id} and r.user_id = ${authorId})`,
+        ),
         cursor ? keysetPredicate(cursor) : undefined,
       ),
       viewerId,

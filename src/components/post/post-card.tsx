@@ -41,6 +41,7 @@ export function PostCard({
   now = new Date(),
   signedIn = false,
   canDelete = false,
+  repostedLabel = null,
 }: {
   post: FeedPost;
   now?: Date;
@@ -51,6 +52,12 @@ export function PostCard({
    * author check is the guard.
    */
   canDelete?: boolean;
+  /**
+   * Context line above the post ("You reposted", "@x reposted"). Set by the
+   * list, which knows whose timeline this is; the card only knows the viewer
+   * reposted it, not who to name.
+   */
+  repostedLabel?: string | null;
 }) {
   const iso = post.createdAt.toISOString();
 
@@ -91,6 +98,10 @@ export function PostCard({
             {formatRelativeTime(iso, now)}
           </time>
         </div>
+
+        {repostedLabel ? (
+          <p className="text-sm text-muted-foreground">{repostedLabel}</p>
+        ) : null}
 
         {post.replyingToUsername ? (
           <p className="text-sm text-muted-foreground">

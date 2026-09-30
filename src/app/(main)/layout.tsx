@@ -8,9 +8,11 @@ import { getUnreadNotificationCount } from "@/lib/db/queries/notifications";
 /**
  * Three-column shell: fixed left nav, fluid centre, sticky right sidebar.
  *
- * `/` is intentionally public so the "For you" feed can be browsed without an
- * account. Sub-routes that need a user call `requireSession()` themselves -
- * `src/proxy.ts` is only an optimistic pre-filter.
+ * `/` itself requires an account (the page renders a landing for signed-out
+ * visitors), but the shell stays session-optional: public routes like profiles
+ * and explore render inside it too. Sub-routes that need a user call
+ * `requireSession()` themselves - `src/proxy.ts` is only an optimistic
+ * pre-filter.
  */
 export default async function MainLayout({
   children,

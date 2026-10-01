@@ -7,6 +7,10 @@ import { getSession } from "@/lib/auth/session";
 /**
  * Centred card shell for the signed-out pages. Bounces an already-signed-in
  * user back to the app; `getSession` is the real check, not a cookie peek.
+ * (Proxy deliberately does not do this bounce: it cannot tell a live cookie
+ * from a stale one, and bouncing on presence alone locks stale-cookie users
+ * out of ever signing in again. A stale cookie resolves itself here - the
+ * form renders, and signing in overwrites it with a live one.)
  */
 export default async function AuthLayout({
   children,
